@@ -195,6 +195,7 @@ impl FieldItem {
             "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "0".to_string(),
             "f32" | "f64" => "0.0".to_string(),
             "String" => "\"\".to_string()".to_string(),
+            "()" => "()".to_string(),
             _ if self.native_type.starts_with("Option<") => "None".to_string(),
             _ if self.native_type.starts_with("Vec<") => "vec![]".to_string(),
             _ => panic!("unknown init value for type: {}", self.native_type),
@@ -391,6 +392,7 @@ impl NativeTypeToParseExt for &str {
                 "root_item.as_str().parse()?".to_string()
             }
             "String" => "root_item.as_str().to_string()".to_string(),
+            "()" => "()".to_string(),
             _ if def_types.contains(*self) => format!("{}::parse_impl(root_item)?", self),
             _ => panic!("unknown native_type: {}", self),
         }

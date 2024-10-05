@@ -5,7 +5,7 @@ use quote::{quote, ToTokens};
 use std::collections::{HashMap, HashSet};
 use std::{fs::File, io::Write};
 use syn::{parse_macro_input, parse_str, ItemMod};
-use utils::proc_macro_meta::{FieldItem2, GetGrammarTypeExt, ToIdentExt};
+use utils::proc_macro_meta::{CtxGrammar, FieldItem2, GetGrammarTypeExt, ToIdentExt};
 
 #[proc_macro_attribute]
 pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
@@ -202,7 +202,6 @@ COMMENT    = _{ ("//" ~ (!NEWLINE ~ ANY)*) | ("/*" ~ (!"*/" ~ ANY)* ~ "*/") }
                 .iter()
                 .map(|field| {
                     let name = field.name.to_ident();
-
                     let native_type: syn::Type = parse_str(&field.native_type).unwrap();
                     quote! { pub #name: #native_type, }
                 })
