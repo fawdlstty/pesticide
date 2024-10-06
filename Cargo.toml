@@ -1,7 +1,14 @@
 [package]
 name = "pesticide"
-version = "0.0.1"
+version = "0.0.3"
 edition = "2021"
+rust-version = "1.61"
+license = "MIT"
+repository = "https://github.com/fawdlstty/pesticide"
+homepage = "https://github.com/fawdlstty/pesticide"
+description = "ORM for CC based on pest"
+keywords = ["compiler", "orm", "ast", "parse"]
+categories = []
 
 [dependencies]
 anyhow = "1.0.89"

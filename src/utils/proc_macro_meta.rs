@@ -353,6 +353,8 @@ impl GetGrammarTypeExt for Vec<Attribute> {
                         split: attr.get_args_item::<String>("split").ok(),
                         last_split: attr.get_args_item::<bool>("last_split").ok(),
                     });
+                } else if ["ID"].contains(&(&name[..])) {
+                    octx_grammar = Some(CtxGrammar::Normal("ID".to_string()));
                 } else if ["normal", "atomic", "silent"].contains(&(&name[..])) {
                     // #[normal(r#" "+" | "-" | "*" | "/" "#)]
                     if let Ok(grammar_value) = attr.get_arg() {
