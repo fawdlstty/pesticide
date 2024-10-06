@@ -73,7 +73,7 @@ pub enum IntOrBool {
 - #[normal]：指定当前成员的语法解析规则（pest语法）
 - #[atomic]：指定当前成员的原子语法解析规则（pest语法）
     + 与normal区别是，原子语法意味着它的组成成分之间不能插入空白字符或者注释
-- #[ID]: 等同于：#[atomic(r#" (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* "#)]
+- #[ID]: 等同于：`#[atomic(r#" (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* "#)]`
 - #[silent]: 指定当前成员的语法解析规则（pest语法）
     + 与normal区别是，静音类型不会实际解析为值，通常用于指定文法中的静态内容。示例：
     ```rust
