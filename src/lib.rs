@@ -5,7 +5,7 @@ use quote::{quote, ToTokens};
 use std::collections::{HashMap, HashSet};
 use std::{fs::File, io::Write};
 use syn::{parse_macro_input, parse_str, ItemMod};
-use utils::proc_macro_meta::{FieldItem2, GetGrammarTypeExt, ToIdentExt};
+use utils::proc_macro_meta::{GetGrammarTypeExt, ToIdentExt};
 
 #[proc_macro_attribute]
 pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
@@ -25,31 +25,23 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 let struct_name = root_struct.ident.to_string();
                 let mut struct_fields = vec![];
                 for root_field in root_struct.fields.iter() {
-                    let (name_grammar, ctx_grammar) = root_field.attrs.get_grammar_type();
-                    struct_fields.push(FieldItem2 {
-                        name: root_field.ident.as_ref().unwrap().to_string(),
-                        native_type: root_field.ty.to_token_stream().to_string().replace(" ", ""),
-                        name_grammar,
-                        ctx_grammar,
-                    });
+                    let name = root_field.ident.as_ref().unwrap().to_string();
+                    let native_type = root_field.ty.to_token_stream().to_string().replace(" ", "");
+                    struct_fields.push(root_field.attrs.get_grammar_type(name, native_type));
                 }
                 structs.insert(struct_name, struct_fields);
             } else if let syn::Item::Enum(root_enum) = root_item {
                 let enum_name = root_enum.ident.to_string();
                 let mut enum_fields = vec![];
                 for root_field in root_enum.variants.iter() {
-                    let (name_grammar, ctx_grammar) = root_field.attrs.get_grammar_type();
-                    enum_fields.push(FieldItem2 {
-                        name: root_field.ident.to_string(),
-                        native_type: root_field
-                            .fields
-                            .iter()
-                            .next()
-                            .map(|p| p.to_token_stream().to_string().replace(" ", ""))
-                            .unwrap_or("()".to_string()),
-                        name_grammar,
-                        ctx_grammar,
-                    });
+                    let name = root_field.ident.to_string();
+                    let native_type = root_field
+                        .fields
+                        .iter()
+                        .next()
+                        .map(|p| p.to_token_stream().to_string().replace(" ", ""))
+                        .unwrap_or("()".to_string());
+                    enum_fields.push(root_field.attrs.get_grammar_type(name, native_type));
                 }
                 enums.insert(enum_name, enum_fields);
             }
@@ -116,6 +108,9 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
     for (struct_name, struct_fields) in structs.iter() {
         pest_cnt.push_str(&format!("// struct - {}::{}\n", mod_name, struct_name));
         for field in struct_fields.iter() {
+            if field.ignore {
+                continue;
+            }
             pest_cnt.push_str(&format!(
                 "{}_{}_{} = {}\n",
                 mod_name,
@@ -124,22 +119,25 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
                 field.ctx_grammar.serilize()
             ));
         }
-        let struct_fields = struct_fields
-            .iter()
-            .map(|field| field.get_grammar_item(&mod_name, struct_name, enable_builtin_ws))
-            .collect::<Vec<_>>();
+        let mut struct_fields1 = vec![];
+        for field in struct_fields.iter() {
+            if field.ignore {
+                continue;
+            }
+            struct_fields1.push(field.get_grammar_item(&mod_name, struct_name, enable_builtin_ws));
+        }
         pest_cnt.push_str(&match enable_builtin_ws {
             true => format!(
                 "{}_{} = {{ WS* ~ {} ~ WS* }}\n",
                 mod_name,
                 struct_name,
-                struct_fields.join(" ~ WS* ~ ")
+                struct_fields1.join(" ~ WS* ~ ")
             ),
             false => format!(
                 "{}_{} = {{ {} }}\n",
                 mod_name,
                 struct_name,
-                struct_fields.join(" ~ ")
+                struct_fields1.join(" ~ ")
             ),
         });
         pest_cnt.push_str(&format!(
@@ -210,21 +208,20 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
             let field_init: Vec<_> = fields
                 .iter()
                 .map(|field| {
-                    let name = field.name.to_ident();
-                    let init_expr: syn::Expr = parse_str(&field.get_struct_init()).unwrap();
-                    quote! { #name: #init_expr }
+                    let name: syn::Ident = field.name.to_ident();
+                    let init_value = field.init_value.clone();
+                    quote! { #name: #init_value }
                 })
                 .collect();
-            let field_parse: Vec<_> = fields
-                .iter()
-                .map(|field| {
-                    let name_full =
-                        format!("{}_{}_{}", mod_name, struct_name, field.name).to_ident();
-                    let parse_expr: syn::Expr =
-                        parse_str(&field.get_struct_parse(&def_types)).unwrap();
-                    quote! { Rule::#name_full => #parse_expr, }
-                })
-                .collect();
+            let mut field_parse = vec![];
+            for field in fields.iter() {
+                if field.ignore {
+                    continue;
+                }
+                let name_full = format!("{}_{}_{}", mod_name, struct_name, field.name).to_ident();
+                let parse_expr: syn::Expr = parse_str(&field.get_struct_parse(&def_types)).unwrap();
+                field_parse.push(quote! { Rule::#name_full => #parse_expr, });
+            }
             let entry_name = format!("{}_{}", mod_name, struct_name).to_ident();
             let entry_name2 = format!("entry_{}_{}", mod_name, struct_name).to_ident();
             let struct_name = struct_name.to_ident();

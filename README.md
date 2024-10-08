@@ -1,5 +1,8 @@
 # pesticide
 
+![version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Ffawdlstty%2Fpesticide%2Fmain%2FCargo.toml&query=package.version&label=version)
+![status](https://img.shields.io/github/actions/workflow/status/fawdlstty/pesticide/rust.yml)
+
 基于pest库实现的编译器领域的ORM。简而言之，定义好了对象模型，即完成语言解析模块的开发。
 
 ## 文档
@@ -98,6 +101,7 @@ pub enum IntOrBool {
         table_name: String,
     }
     ```
+- #[ignore] 或 #[ignore(init_value=/*expr*/)]：指定当前成员不参与解析，仅用于后续自定义处理。init_value代表构造此对象的初值，如果不指定会报错，那么需指定初值
 
 ## TODO
 

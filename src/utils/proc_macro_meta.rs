@@ -3,10 +3,8 @@ use lazy_static::lazy_static;
 use proc_macro::Span;
 use quote::ToTokens;
 use std::collections::{HashMap, HashSet};
-use syn::{
-    meta::ParseNestedMeta, punctuated::Punctuated, Attribute, Ident, LitBool, LitStr, Meta,
-    MetaList, Token,
-};
+use syn::{meta::ParseNestedMeta, punctuated::Punctuated};
+use syn::{Attribute, Expr, Ident, LitBool, LitStr, Meta, MetaList, Token};
 
 pub trait AttrToValueExt {
     fn attr_to_value(meta_args: &MetaList) -> anyhow::Result<Self>
@@ -32,7 +30,7 @@ impl AttrToValueExt for bool {
     }
 }
 
-pub trait ExprToValueExt: std::fmt::Debug {
+pub trait ExprToValueExt {
     fn expr_to_value(expr: &syn::Expr) -> anyhow::Result<Self>
     where
         Self: Sized;
@@ -72,6 +70,15 @@ impl ExprToValueExt for bool {
                 expr.to_token_stream()
             ))),
         }
+    }
+}
+
+impl ExprToValueExt for Expr {
+    fn expr_to_value(expr: &syn::Expr) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(expr.clone())
     }
 }
 
@@ -176,32 +183,26 @@ impl CtxGrammar {
 }
 
 pub struct FieldItem {
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub native_type: String,
     pub name_grammar: NameGrammar,
     pub ctx_grammar: CtxGrammar,
+    pub init_value: Expr,
+    pub ignore: bool,
 }
 
 pub struct FieldItem2 {
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub native_type: String,
     pub name_grammar: Option<NameGrammar>,
     pub ctx_grammar: Option<CtxGrammar>,
+    pub init_value: Option<Expr>,
+    pub ignore: bool,
 }
 
 impl FieldItem {
-    pub fn get_struct_init(&self) -> String {
-        match &self.native_type[..] {
-            "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "0".to_string(),
-            "f32" | "f64" => "0.0".to_string(),
-            "String" => "\"\".to_string()".to_string(),
-            "()" => "()".to_string(),
-            _ if self.native_type.starts_with("Option<") => "None".to_string(),
-            _ if self.native_type.starts_with("Vec<") => "vec![]".to_string(),
-            _ => panic!("unknown init value for type: {}", self.native_type),
-        }
-    }
-
     pub fn get_struct_parse(&self, def_types: &HashSet<String>) -> String {
         let (owrap, base_type) = self.native_type.get_base_type();
         let base_type = base_type.native_type_to_parse(def_types);
@@ -276,99 +277,126 @@ impl FieldItem2 {
         mod_name: &str,
         parent_name: &str,
     ) -> FieldItem {
-        let name_grammar = match &self.name_grammar {
-            Some(grammar) => grammar.clone(),
-            None => {
-                let native_type = &self.native_type[..];
-                if native_type.starts_with("Vec<") && native_type.ends_with(">") {
-                    NameGrammar {
-                        char: Some("*".to_string()),
-                        split: None,
-                        last_split: None,
-                    }
-                } else if native_type.starts_with("Option<") && native_type.ends_with(">") {
-                    NameGrammar {
-                        char: Some("?".to_string()),
-                        split: None,
-                        last_split: None,
-                    }
-                } else {
-                    NameGrammar {
-                        char: None,
-                        split: None,
-                        last_split: None,
-                    }
+        let name_grammar = self.name_grammar.clone().unwrap_or_else(|| {
+            let native_type = &self.native_type[..];
+            if native_type.starts_with("Vec<") && native_type.ends_with(">") {
+                NameGrammar {
+                    char: Some("*".to_string()),
+                    split: None,
+                    last_split: None,
+                }
+            } else if native_type.starts_with("Option<") && native_type.ends_with(">") {
+                NameGrammar {
+                    char: Some("?".to_string()),
+                    split: None,
+                    last_split: None,
+                }
+            } else {
+                NameGrammar {
+                    char: None,
+                    split: None,
+                    last_split: None,
                 }
             }
-        };
-        let ctx_grammar = match &self.ctx_grammar {
-            Some(grammar) => grammar.clone(),
-            None => {
-                let mut native_type = &self.native_type[..];
-                if native_type.starts_with("Vec<") && native_type.ends_with(">") {
-                    native_type = &native_type[4..native_type.len() - 1];
-                } else if native_type.starts_with("Option<") && native_type.ends_with(">") {
-                    native_type = &native_type[7..native_type.len() - 1];
-                }
-                match def_types.contains(native_type) {
-                    true => CtxGrammar::Normal(format!("{}_{}", mod_name, native_type)),
-                    false => match ALL_BUILTIN_TYPES.get(&native_type) {
-                        Some(builtin_type) => {
-                            builtin_types.insert(*builtin_type);
-                            CtxGrammar::Normal((*builtin_type).to_string())
-                        }
-                        None => {
-                            panic!(
-                                "unknown type[{}] in struct/enum item[{}::{}::{}]",
-                                native_type, mod_name, parent_name, self.name
-                            );
-                        }
-                    },
-                }
+        });
+        let ctx_grammar = self.ctx_grammar.clone().unwrap_or_else(|| {
+            let mut native_type = &self.native_type[..];
+            if native_type.starts_with("Vec<") && native_type.ends_with(">") {
+                native_type = &native_type[4..native_type.len() - 1];
+            } else if native_type.starts_with("Option<") && native_type.ends_with(">") {
+                native_type = &native_type[7..native_type.len() - 1];
+            } else if self.ignore {
+                return CtxGrammar::Normal("".to_string());
             }
-        };
+            match def_types.contains(native_type) {
+                true => CtxGrammar::Normal(format!("{}_{}", mod_name, native_type)),
+                false => match ALL_BUILTIN_TYPES.get(&native_type) {
+                    Some(builtin_type) => {
+                        builtin_types.insert(*builtin_type);
+                        CtxGrammar::Normal((*builtin_type).to_string())
+                    }
+                    None => {
+                        panic!(
+                            "unknown type[{}] in struct/enum item[{}::{}::{}]",
+                            native_type, mod_name, parent_name, self.name
+                        );
+                    }
+                },
+            }
+        });
+        let init_value = self.init_value.clone().unwrap_or_else(|| {
+            syn::parse_str(match &self.native_type[..] {
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "0",
+                "f32" | "f64" => "0.0",
+                "String" => "\"\".to_string()",
+                "()" => "()",
+                _ if self.native_type.starts_with("Option<") => "None",
+                _ if self.native_type.starts_with("Vec<") => "vec![]",
+                _ => panic!("unknown init value for type: {}", self.native_type),
+            })
+            .unwrap()
+        });
         FieldItem {
+            attrs: self.attrs.clone(),
             name: self.name.clone(),
             native_type: self.native_type.clone(),
             name_grammar: name_grammar,
             ctx_grammar: ctx_grammar,
+            init_value: init_value,
+            ignore: self.ignore,
         }
     }
 }
 
 pub trait GetGrammarTypeExt {
-    fn get_grammar_type(&self) -> (Option<NameGrammar>, Option<CtxGrammar>);
+    fn get_grammar_type(&self, name: String, native_type: String) -> FieldItem2;
 }
 
 impl GetGrammarTypeExt for Vec<Attribute> {
-    fn get_grammar_type(&self) -> (Option<NameGrammar>, Option<CtxGrammar>) {
-        let mut oname_grammar = None;
-        let mut octx_grammar = None;
+    fn get_grammar_type(&self, name: String, native_type: String) -> FieldItem2 {
+        let mut attrs = vec![];
+        let mut name_grammar = None;
+        let mut ctx_grammar = None;
+        let mut init_value = None;
+        let mut ignore = false;
         for attr in self.iter() {
             if let Some(name) = attr.get_name() {
                 if &name == "repeat" {
                     // #[repeat(char = '+', split = ',', last_split = true)]
-                    oname_grammar = Some(NameGrammar {
+                    name_grammar = Some(NameGrammar {
                         char: attr.get_args_item::<String>("char").ok(),
                         split: attr.get_args_item::<String>("split").ok(),
                         last_split: attr.get_args_item::<bool>("last_split").ok(),
                     });
-                } else if ["ID"].contains(&(&name[..])) {
-                    octx_grammar = Some(CtxGrammar::Normal("ID".to_string()));
+                } else if &name == "ID" {
+                    ctx_grammar = Some(CtxGrammar::Normal("ID".to_string()));
                 } else if ["normal", "atomic", "silent"].contains(&(&name[..])) {
                     // #[normal(r#" "+" | "-" | "*" | "/" "#)]
                     if let Ok(grammar_value) = attr.get_arg() {
                         match &name[..] {
-                            "normal" => octx_grammar = Some(CtxGrammar::Normal(grammar_value)),
-                            "atomic" => octx_grammar = Some(CtxGrammar::Atomic(grammar_value)),
-                            "silent" => octx_grammar = Some(CtxGrammar::Silent(grammar_value)),
+                            "normal" => ctx_grammar = Some(CtxGrammar::Normal(grammar_value)),
+                            "atomic" => ctx_grammar = Some(CtxGrammar::Atomic(grammar_value)),
+                            "silent" => ctx_grammar = Some(CtxGrammar::Silent(grammar_value)),
                             _ => continue,
                         };
                     }
+                } else if &name == "ignore" {
+                    ignore = true;
+                    init_value = attr.get_args_item::<Expr>("init_value").ok()
+                } else {
+                    attrs.push(attr.clone());
                 }
             }
         }
-        (oname_grammar, octx_grammar)
+        FieldItem2 {
+            attrs,
+            name,
+            native_type,
+            name_grammar,
+            ctx_grammar,
+            init_value,
+            ignore,
+        }
     }
 }
 
