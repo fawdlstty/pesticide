@@ -29,7 +29,7 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
                     let native_type = root_field.ty.to_token_stream().to_string().replace(" ", "");
                     struct_fields.push(root_field.attrs.get_grammar_type(name, native_type));
                 }
-                structs.insert(struct_name, struct_fields);
+                structs.insert(struct_name, (struct_fields, root_struct.attrs.clone()));
             } else if let syn::Item::Enum(root_enum) = root_item {
                 let enum_name = root_enum.ident.to_string();
                 let mut enum_fields = vec![];
@@ -43,7 +43,7 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
                         .unwrap_or("()".to_string());
                     enum_fields.push(root_field.attrs.get_grammar_type(name, native_type));
                 }
-                enums.insert(enum_name, enum_fields);
+                enums.insert(enum_name, (enum_fields, root_enum.attrs.clone()));
             }
         }
     }
@@ -53,26 +53,26 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
     def_types.extend(enums.keys().map(|e| e.to_string()));
     let structs: HashMap<_, _> = structs
         .into_iter()
-        .map(|(struct_name, fields)| {
+        .map(|(struct_name, (fields, attrs))| {
             let fields: Vec<_> = fields
                 .into_iter()
                 .map(|field| {
                     field.to_field_item(&mut def_types, &mut builtin_types, &mod_name, &struct_name)
                 })
                 .collect();
-            (struct_name, fields)
+            (struct_name, (fields, attrs))
         })
         .collect();
     let enums: HashMap<_, _> = enums
         .into_iter()
-        .map(|(enum_name, fields)| {
+        .map(|(enum_name, (fields, attrs))| {
             let fields: Vec<_> = fields
                 .into_iter()
                 .map(|field| {
                     field.to_field_item(&mut def_types, &mut builtin_types, &mod_name, &enum_name)
                 })
                 .collect();
-            (enum_name, fields)
+            (enum_name, (fields, attrs))
         })
         .collect();
 
@@ -105,9 +105,9 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
     }
     pest_cnt.push_str("\n");
 
-    for (struct_name, struct_fields) in structs.iter() {
+    for (struct_name, (fields, _)) in structs.iter() {
         pest_cnt.push_str(&format!("// struct - {}::{}\n", mod_name, struct_name));
-        for field in struct_fields.iter() {
+        for field in fields.iter() {
             if field.ignore {
                 continue;
             }
@@ -119,25 +119,28 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
                 field.ctx_grammar.serilize()
             ));
         }
-        let mut struct_fields1 = vec![];
-        for field in struct_fields.iter() {
-            if field.ignore {
-                continue;
+        let fields = {
+            let mut fields1 = vec![];
+            for field in fields.iter() {
+                if field.ignore {
+                    continue;
+                }
+                fields1.push(field.get_grammar_item(&mod_name, struct_name, enable_builtin_ws));
             }
-            struct_fields1.push(field.get_grammar_item(&mod_name, struct_name, enable_builtin_ws));
-        }
+            fields1
+        };
         pest_cnt.push_str(&match enable_builtin_ws {
             true => format!(
                 "{}_{} = {{ WS* ~ {} ~ WS* }}\n",
                 mod_name,
                 struct_name,
-                struct_fields1.join(" ~ WS* ~ ")
+                fields.join(" ~ WS* ~ ")
             ),
             false => format!(
                 "{}_{} = {{ {} }}\n",
                 mod_name,
                 struct_name,
-                struct_fields1.join(" ~ ")
+                fields.join(" ~ ")
             ),
         });
         pest_cnt.push_str(&format!(
@@ -145,9 +148,9 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
             mod_name, struct_name
         ));
     }
-    for (enum_name, enum_fields) in enums.iter() {
+    for (enum_name, (fields, _)) in enums.iter() {
         pest_cnt.push_str(&format!("// enum - {}::{}\n", mod_name, enum_name));
-        for field in enum_fields.iter() {
+        for field in fields.iter() {
             pest_cnt.push_str(&format!(
                 "{}_{}_{} = {}\n",
                 mod_name,
@@ -160,13 +163,13 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
             "{}_{} = {{ {} }}\n",
             mod_name,
             enum_name,
-            enum_fields
+            fields
                 .iter()
                 .map(|field| field.get_grammar_item(&mod_name, enum_name, enable_builtin_ws))
                 .collect::<Vec<_>>()
                 .join(" | ")
         ));
-        let struct_fields = enum_fields
+        let fields = fields
             .iter()
             .map(|field| field.get_grammar_item(&mod_name, enum_name, enable_builtin_ws))
             .collect::<Vec<_>>();
@@ -175,13 +178,13 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
                 "{}_{} = {{ WS* ~ ({}) ~ WS* }}\n",
                 mod_name,
                 enum_name,
-                struct_fields.join(" | ")
+                fields.join(" | ")
             ),
             false => format!(
                 "{}_{} = {{ {} }}\n",
                 mod_name,
                 enum_name,
-                struct_fields.join(" | ")
+                fields.join(" | ")
             ),
         });
         pest_cnt.push_str(&format!(
@@ -196,7 +199,7 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
     let structs: Vec<_> = structs
         .into_iter()
-        .map(|(struct_name, fields)| {
+        .map(|(struct_name, (fields, attrs))| {
             let root_fields: Vec<_> = fields
                 .iter()
                 .map(|field| {
@@ -226,7 +229,7 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
             let entry_name2 = format!("entry_{}_{}", mod_name, struct_name).to_ident();
             let struct_name = struct_name.to_ident();
             quote! {
-                #[derive(Debug)]
+                #(#attrs)*
                 pub struct #struct_name {
                     #(#root_fields)*
                 }
@@ -260,7 +263,7 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
     let enums: Vec<_> = enums
         .into_iter()
-        .map(|(enum_name, fields)| {
+        .map(|(enum_name, (fields, attrs))| {
             let root_fields: Vec<_> = fields
                 .iter()
                 .map(|field| {
@@ -290,7 +293,7 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
             let entry_name2 = format!("entry_{}_{}", mod_name, enum_name).to_ident();
             let enum_name = enum_name.to_ident();
             quote! {
-                #[derive(Debug)]
+                #(#attrs)*
                 pub enum #enum_name {
                     #(#root_fields)*
                 }

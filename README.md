@@ -123,6 +123,5 @@ mod ast {
 
 - enum类型支持Option<>
 - enum类型支持Vec<>
-- 属性传递
 - 可见性传递
 - 内嵌表达式字符串
