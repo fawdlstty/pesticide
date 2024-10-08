@@ -5,9 +5,9 @@
 
 基于pest库实现的编译器领域的ORM。简而言之，定义好了对象模型，即完成语言解析模块的开发。
 
-## 文档
+## 用户手册
 
-举个最简单的例子：
+举个最简单的例子：`2+3`，这个表达式包含三个元素，数字、运算符、数字。为了能让pesticide解析它，我们为每个元素定义一个字段，示例如下：
 
 ```rust
 use pesticide::pesticide;
@@ -23,7 +23,7 @@ mod ast {
 }
 
 fn main() {
-    let expr = ast::Expr::try_parse(r#"2+3"#).unwrap();
+    let expr = ast::Expr::try_parse("2+3").unwrap();
     println!("ast: {:?}", e);
 }
 ```
@@ -92,16 +92,32 @@ pub enum IntOrBool {
     pub struct Expr {
         #[silent(r#" "select" "#)]
         select: (),
+
         #[ID]
         #[repeat(char = '+', split = ',', last_split = false)]
         fields: Vec<String>,
+
         #[silent(r#" "from" "#)]
         from: (),
+
         #[ID]
         table_name: String,
     }
     ```
-- #[ignore] 或 #[ignore(init_value=/*expr*/)]：指定当前成员不参与解析，仅用于后续自定义处理。init_value代表构造此对象的初值，如果不指定会报错，那么需指定初值
+- #[ignore] 或 #[ignore(init_value=/*expr*/)]：指定当前成员不参与解析，仅用于后续自定义处理。init_value代表构造此对象的初值，如果不指定会报错，那么需指定初值。示例：
+```rust
+#[derive(Debug)]
+pub struct MyStruct { pub a: i32, }
+
+#[pesticide]
+mod ast {
+    pub struct Expr {
+        ...
+        #[ignore(init_value=crate::MyStruct{a:42})]
+        my_struct: crate::MyStruct,
+    }
+}
+```
 
 ## TODO
 
