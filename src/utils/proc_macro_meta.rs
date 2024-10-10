@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use lazy_static::lazy_static;
 use proc_macro::Span;
 use quote::ToTokens;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use syn::{meta::ParseNestedMeta, punctuated::Punctuated};
 use syn::{Attribute, Expr, Ident, LitBool, LitStr, Meta, MetaList, Token};
@@ -182,6 +183,7 @@ impl CtxGrammar {
     }
 }
 
+#[derive(Clone)]
 pub struct FieldItem {
     pub attrs: Vec<Attribute>,
     pub name: String,
@@ -192,6 +194,7 @@ pub struct FieldItem {
     pub ignore: bool,
 }
 
+#[derive(Clone)]
 pub struct FieldItem2 {
     pub attrs: Vec<Attribute>,
     pub name: String,
@@ -272,8 +275,8 @@ impl FieldItem {
 impl FieldItem2 {
     pub fn to_field_item(
         &self,
-        def_types: &mut HashSet<String>,
-        builtin_types: &mut HashSet<&str>,
+        structs: &HashMap<String, (Vec<FieldItem2>, Vec<Attribute>)>,
+        enums: &HashMap<String, (Vec<FieldItem2>, Vec<Attribute>)>,
         mod_name: &str,
         parent_name: &str,
     ) -> FieldItem {
@@ -308,13 +311,10 @@ impl FieldItem2 {
             } else if self.ignore {
                 return CtxGrammar::Normal("".to_string());
             }
-            match def_types.contains(native_type) {
+            match structs.contains_key(native_type) || enums.contains_key(native_type) {
                 true => CtxGrammar::Normal(format!("{}_{}", mod_name, native_type)),
                 false => match ALL_BUILTIN_TYPES.get(&native_type) {
-                    Some(builtin_type) => {
-                        builtin_types.insert(*builtin_type);
-                        CtxGrammar::Normal((*builtin_type).to_string())
-                    }
+                    Some(builtin_type) => CtxGrammar::Normal((*builtin_type).to_string()),
                     None => {
                         panic!(
                             "unknown type[{}] in struct/enum item[{}::{}::{}]",
@@ -325,14 +325,24 @@ impl FieldItem2 {
             }
         });
         let init_value = self.init_value.clone().unwrap_or_else(|| {
-            syn::parse_str(match &self.native_type[..] {
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "0",
-                "f32" | "f64" => "0.0",
-                "String" => "\"\".to_string()",
-                "()" => "()",
-                _ if self.native_type.starts_with("Option<") => "None",
-                _ if self.native_type.starts_with("Vec<") => "vec![]",
-                _ => panic!("unknown init value for type: {}", self.native_type),
+            syn::parse_str(&match &self.native_type[..] {
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => Cow::Borrowed("0"),
+                "f32" | "f64" => Cow::Borrowed("0.0"),
+                "String" => Cow::Borrowed("\"\".to_string()"),
+                "()" => Cow::Borrowed("()"),
+                native_type => {
+                    if native_type.starts_with("Option<") {
+                        Cow::Borrowed("None")
+                    } else if native_type.starts_with("Vec<") {
+                        Cow::Borrowed("vec![]")
+                    } else if let Some(struct_item) = structs.get(native_type) {
+                        Cow::Owned(struct_item.0.make_struct_init_value(native_type))
+                    } else if let Some(enum_item) = enums.get(native_type) {
+                        Cow::Owned(enum_item.0.make_enum_init_value(native_type))
+                    } else {
+                        panic!("unknown init value for type: {}", self.native_type)
+                    }
+                }
             })
             .unwrap()
         });
@@ -445,5 +455,26 @@ impl NativeTypeToParseExt for String {
             Some(p) => (Some(&self[0..p]), &self[p + 1..self.len() - 1]),
             None => (None, self),
         }
+    }
+}
+
+pub trait MakeInitValueExt {
+    fn make_struct_init_value(&self, parent_name: &str) -> String;
+    fn make_enum_init_value(&self, parent_name: &str) -> String;
+}
+
+impl MakeInitValueExt for Vec<FieldItem2> {
+    fn make_struct_init_value(&self, parent_name: &str) -> String {
+        todo!()
+    }
+
+    fn make_enum_init_value(&self, parent_name: &str) -> String {
+        for field in self.iter() {
+            if field.ignore {
+                continue;
+            }
+            panic!("name: {}, ntype: {}", field.name, field.native_type);
+        }
+        todo!()
     }
 }

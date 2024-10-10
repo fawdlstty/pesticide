@@ -15,7 +15,6 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
     // let mod_vis = root_mod.vis.to_token_stream().to_string();
     let mod_name = root_mod.ident.to_string();
 
-    let mut builtin_types = HashSet::new();
     let mut structs = HashMap::new();
     let mut enums = HashMap::new();
 
@@ -49,6 +48,8 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     // process field item grammars
+    let structs_bak = structs.clone();
+    let enums_bak = enums.clone();
     let mut def_types: HashSet<_> = structs.keys().map(|s| s.to_string()).collect();
     def_types.extend(enums.keys().map(|e| e.to_string()));
     let structs: HashMap<_, _> = structs
@@ -56,9 +57,7 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
         .map(|(struct_name, (fields, attrs))| {
             let fields: Vec<_> = fields
                 .into_iter()
-                .map(|field| {
-                    field.to_field_item(&mut def_types, &mut builtin_types, &mod_name, &struct_name)
-                })
+                .map(|field| field.to_field_item(&structs_bak, &enums_bak, &mod_name, &struct_name))
                 .collect();
             (struct_name, (fields, attrs))
         })
@@ -68,9 +67,7 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
         .map(|(enum_name, (fields, attrs))| {
             let fields: Vec<_> = fields
                 .into_iter()
-                .map(|field| {
-                    field.to_field_item(&mut def_types, &mut builtin_types, &mod_name, &enum_name)
-                })
+                .map(|field| field.to_field_item(&structs_bak, &enums_bak, &mod_name, &enum_name))
                 .collect();
             (enum_name, (fields, attrs))
         })
@@ -83,28 +80,17 @@ pub fn pesticide(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
 WS      = _{ " " | "\t" | NEWLINE }
 COMMENT = _{ ("//" ~ (!NEWLINE ~ ANY)*) | ("/*" ~ (!"*/" ~ ANY)* ~ "*/") }
-ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+ID           = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+bool_literal = @{ "true" | "false" }
+num_literal  = @{ (("+"|"-")?~ASCII_DIGIT+) | (("0x"|"0X")~HEX_DIGIT+ ) | (("0b"|"0B")~("0"|"1")+) }
+float_literal = @{ num_literal | "nan" | ("+"|"-")?~("inf" | (ASCII_DIGIT+~"."~ASCII_DIGIT*) | (ASCII_DIGIT*~"."~ASCII_DIGIT+)) }
+string_literal = @{ "\"" ~ ("\\\"" | (!"\"" ~ ANY))* ~ "\"" }
 
 
 
 "#,
     );
-    for builtin_type in builtin_types.into_iter() {
-        let builtin_grammar = match builtin_type {
-            "bool_literal" => r#" "true" | "false" "#,
-            "num_literal" => {
-                r#" ("-"?~ASCII_DIGIT+) | (("0x"|"0X")~HEX_DIGIT+ ) | (("0b"|"0B")~("0"|"1")+) "#
-            }
-            "float_literal" => {
-                r#""nan" | "-"?~"inf" | ("-"?~ASCII_DIGIT+ ~("."~ASCII_DIGIT*)) | ("-"?~ASCII_DIGIT+ ~("."~ASCII_DIGIT+)) "#
-            }
-            "string_literal" => r#" "\"" ~ ("\\\"" | (!"\"" ~ ANY))* ~ "\"" "#,
-            _ => panic!("unknown builtin type: {}", builtin_type),
-        };
-        pest_cnt.push_str(&format!("{} = @{{ {} }}\n", builtin_type, builtin_grammar));
-    }
-    pest_cnt.push_str("\n");
-
     for (struct_name, (fields, _)) in structs.iter() {
         pest_cnt.push_str(&format!("// struct - {}::{}\n", mod_name, struct_name));
         for field in fields.iter() {
@@ -159,16 +145,6 @@ ID      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
                 field.ctx_grammar.serilize()
             ));
         }
-        pest_cnt.push_str(&format!(
-            "{}_{} = {{ {} }}\n",
-            mod_name,
-            enum_name,
-            fields
-                .iter()
-                .map(|field| field.get_grammar_item(&mod_name, enum_name, enable_builtin_ws))
-                .collect::<Vec<_>>()
-                .join(" | ")
-        ));
         let fields = fields
             .iter()
             .map(|field| field.get_grammar_item(&mod_name, enum_name, enable_builtin_ws))
