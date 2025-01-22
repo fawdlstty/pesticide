@@ -328,6 +328,7 @@ impl FieldItem2 {
             syn::parse_str(&match &self.native_type[..] {
                 "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => Cow::Borrowed("0"),
                 "f32" | "f64" => Cow::Borrowed("0.0"),
+                "bool" => Cow::Borrowed("false"),
                 "String" => Cow::Borrowed("\"\".to_string()"),
                 "()" => Cow::Borrowed("()"),
                 native_type => {
@@ -431,6 +432,7 @@ impl NativeTypeToParseExt for &str {
             "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" => {
                 "root_item.as_str().parse()?".to_string()
             }
+            "bool" => "root_item.as_str().parse()?".to_string(),
             "String" => "root_item.as_str().to_string()".to_string(),
             "()" => "()".to_string(),
             _ if def_types.contains(*self) => format!("{}::parse_impl(root_item)?", self),
@@ -465,16 +467,27 @@ pub trait MakeInitValueExt {
 
 impl MakeInitValueExt for Vec<FieldItem2> {
     fn make_struct_init_value(&self, parent_name: &str) -> String {
-        todo!()
+        let mut ret = format!("{parent_name} {{ ");
+        for (index, field) in self.iter().enumerate() {
+            if index > 0 {
+                ret.push_str(", ");
+            }
+            ret.push_str(&format!(
+                "{}: {}",
+                field.name,
+                field.native_type.native_type_to_parse(&HashSet::new())
+            ));
+        }
+        ret.push_str(" }");
+        ret
     }
 
     fn make_enum_init_value(&self, parent_name: &str) -> String {
         for field in self.iter() {
-            if field.ignore {
-                continue;
+            if field.native_type == "()" {
+                return format!("{}::{}", parent_name, field.name);
             }
-            panic!("name: {}, ntype: {}", field.name, field.native_type);
         }
-        todo!()
+        panic!("[enum]");
     }
 }
