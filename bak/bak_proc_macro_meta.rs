@@ -436,7 +436,7 @@ impl NativeTypeToParseExt for &str {
             "String" => "root_item.as_str().to_string()".to_string(),
             "()" => "()".to_string(),
             _ if def_types.contains(*self) => format!("{}::parse_impl(root_item)?", self),
-            _ => panic!("unknown native_type: {}", self),
+            _ => panic!("unknown native_type: {self}, def_types: {def_types:?}"),
         }
     }
 

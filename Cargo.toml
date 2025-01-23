@@ -1,22 +1,3 @@
-[package]
-name = "pesticide"
-version = "0.0.5"
-edition = "2021"
-rust-version = "1.61"
-license = "MIT"
-repository = "https://github.com/fawdlstty/pesticide"
-homepage = "https://github.com/fawdlstty/pesticide"
-description = "ORM for CC based on pest"
-keywords = ["compiler", "orm", "ast", "parse"]
-categories = []
-
-[dependencies]
-anyhow = "1.0.89"
-lazy_static = "1.5.0"
-pest = "2.7.15"
-pest_derive = "2.7.15"
-quote = "1.0.37"
-syn = { version = "2.0.79", features = ["full"] }
-
-[lib]
-proc-macro = true
+[workspace]
+resolver = "2"
+members = ["example", "pesticide"]
