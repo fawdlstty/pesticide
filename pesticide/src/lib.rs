@@ -37,7 +37,8 @@ pub fn pesticide(attr: TokenStream, input: TokenStream) -> TokenStream {
                     let item_name = format!("{struct_name}_{struct_name}");
                     let mut sub_items = vec![];
                     for root_field in root_struct.fields.iter() {
-                        let name = root_field.ident.as_ref().unwrap().to_string();
+                        let field_name = root_field.ident.as_ref().unwrap().to_string();
+                        let item_sub_name = format!("{item_name}_{field_name}");
                         let native_type =
                             root_field.ty.to_token_stream().to_string().replace(" ", "");
                         if root_field.attrs.len() > 1 {
@@ -47,7 +48,6 @@ pub fn pesticide(attr: TokenStream, input: TokenStream) -> TokenStream {
                             true => todo!(),
                             false => todo!(),
                         };
-                        let item_sub_name = format!("{item_name}_{name}");
                         sub_items.push(GrammarCtx::Id(item_sub_name));
                         // struct_fields.push(root_field.attrs.get_grammar_type(name, native_type));
                     }
@@ -89,6 +89,38 @@ enum GrammarCtx {
     Silent(Box<GrammarCtx>),
     Atomic(Box<GrammarCtx>),
     Raw(String),
+}
+
+trait AttributeExt {
+    fn get_name(&self) -> Option<String>;
+}
+
+impl AttributeExt for syn::Attribute {
+    fn get_name(&self) -> Option<String> {
+        self.path().get_ident().map(|i| i.to_string())
+    }
+}
+
+impl AttributeExt for syn::meta::ParseNestedMeta<'_> {
+    fn get_name(&self) -> Option<String> {
+        self.path.get_ident().map(|i| i.to_string())
+    }
+}
+
+trait CalcItemExt {
+    fn get_grammar_type(&self, name: String, native_type: String) -> GrammarCtx;
+}
+
+impl CalcItemExt for Option<syn::Attribute> {
+    fn get_grammar_type(&self, name: String, native_type: String) -> GrammarCtx {
+        match self {
+            Some(attr) => {
+                if let Some(name) = attr.get_name() {
+                    //
+                }
+            }
+        }
+    }
 }
 
 /*
