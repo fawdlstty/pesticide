@@ -30,11 +30,12 @@ pub fn pesticide(attr: TokenStream, input: TokenStream) -> TokenStream {
         //
         let input2 = input.clone();
         let root_mod = syn::parse_macro_input!(input2 as syn::ItemMod);
+        let mod_name = root_mod.ident.to_string();
         for (_, root_items) in root_mod.content.iter() {
             for root_item in root_items {
                 if let syn::Item::Struct(root_struct) = root_item {
                     let struct_name = root_struct.ident.to_string();
-                    let item_name = format!("{struct_name}_{struct_name}");
+                    let item_name = format!("{mod_name}_{struct_name}");
                     let mut sub_items = vec![];
                     for root_field in root_struct.fields.iter() {
                         let field_name = root_field.ident.as_ref().unwrap().to_string();
@@ -44,32 +45,45 @@ pub fn pesticide(attr: TokenStream, input: TokenStream) -> TokenStream {
                         if root_field.attrs.len() > 1 {
                             panic!("current not support multiple attr");
                         }
-                        let ctx: GrammarCtx = match root_field.attrs.len() == 0 {
-                            true => todo!(),
-                            false => todo!(),
-                        };
-                        sub_items.push(GrammarCtx::Id(item_sub_name));
-                        // struct_fields.push(root_field.attrs.get_grammar_type(name, native_type));
+                        let ctx = root_field
+                            .attrs
+                            .get(0)
+                            .get_grammar_type(item_sub_name.clone(), native_type);
+                        sub_items.push(GrammarCtx::Id(item_sub_name.clone()));
+                        items.insert(item_sub_name, ctx);
                     }
                     items.insert(item_name, GrammarCtx::All(sub_items));
                 } else if let syn::Item::Enum(root_enum) = root_item {
                     let enum_name = root_enum.ident.to_string();
-                    // let mut enum_fields = vec![];
-                    // for root_field in root_enum.variants.iter() {
-                    //     let name = root_field.ident.to_string();
-                    //     let native_type = root_field.fields.iter().next()
-                    //         .map(|p| p.to_token_stream().to_string().replace(" ", ""))
-                    //         .unwrap_or("()".to_string());
-                    //     enum_fields.push(root_field.attrs.get_grammar_type(name, native_type));
-                    // }
-                    // enums.insert(enum_name, (enum_fields, root_enum.attrs.clone()));
+                    let item_name = format!("{mod_name}_{enum_name}");
+                    let mut sub_items = vec![];
+                    for root_field in root_enum.variants.iter() {
+                        let field_name = root_field.ident.to_string();
+                        let item_sub_name = format!("{item_name}_{field_name}");
+                        let native_type = root_field
+                            .fields
+                            .iter()
+                            .next()
+                            .map(|p| p.to_token_stream().to_string().replace(" ", ""))
+                            .unwrap_or("()".to_string());
+                        if root_field.attrs.len() > 1 {
+                            panic!("current not support multiple attr");
+                        }
+                        let ctx = root_field
+                            .attrs
+                            .get(0)
+                            .get_grammar_type(item_sub_name.clone(), native_type);
+                        sub_items.push(GrammarCtx::Id(item_sub_name.clone()));
+                        items.insert(item_sub_name, ctx);
+                    }
+                    items.insert(item_name, GrammarCtx::All(sub_items));
                 }
             }
         }
         items
     };
     //
-    input
+    quote::quote! {}.into()
 }
 
 struct GrammarCtxRepeat {
@@ -111,15 +125,22 @@ trait CalcItemExt {
     fn get_grammar_type(&self, name: String, native_type: String) -> GrammarCtx;
 }
 
-impl CalcItemExt for Option<syn::Attribute> {
+impl CalcItemExt for Option<&syn::Attribute> {
     fn get_grammar_type(&self, name: String, native_type: String) -> GrammarCtx {
+        panic!("BBBBBBBBBB {:?}", self.to_token_stream());
         match self {
             Some(attr) => {
                 if let Some(name) = attr.get_name() {
-                    //
+                    if name == "any" {
+                        //let mut items = vec![];
+                        panic!("AAAAAAAAAA {:?}", attr.to_token_stream());
+                    }
                 }
+                todo!()
             }
+            None => todo!(),
         }
+        GrammarCtx::Builtin
     }
 }
 
