@@ -1,151 +1,338 @@
+mod proc_macro_meta;
+
 use proc_macro::TokenStream;
-use quote::ToTokens;
-use std::collections::HashMap;
+use proc_macro_meta::{GetGrammarTypeExt, ToIdentExt};
+use quote::{quote, ToTokens};
+use std::collections::{HashMap, HashSet};
+use std::{fs::File, io::Write};
+use syn::{meta, parse_macro_input, parse_str, ItemMod, LitStr};
 
 #[proc_macro_attribute]
 pub fn pesticide(attr: TokenStream, input: TokenStream) -> TokenStream {
     let target_path = {
         let mut target_path: String = "target/pesticide.pest".to_string();
-        let attr_parser = syn::meta::parser(|meta| {
+        let attr_parser = meta::parser(|meta| {
             if meta.path.is_ident("target_path") {
-                let ttarget_path: syn::LitStr = meta.value()?.parse()?;
+                let ttarget_path: LitStr = meta.value()?.parse()?;
                 target_path = format!("{}/pesticide.pest", ttarget_path.value());
                 Ok(())
             } else {
                 Err(meta.error(format!("unsupported arg: {:?}", meta.path.get_ident())))
             }
         });
-        syn::parse_macro_input!(attr with attr_parser);
+        parse_macro_input!(attr with attr_parser);
         target_path
     };
-    let pest_items = {
-        let mut items: HashMap<String, GrammarCtx> = HashMap::new();
-        items.insert("WS".into(), GrammarCtx::Builtin);
-        items.insert("COMMENT".into(), GrammarCtx::Builtin);
-        items.insert("ID".into(), GrammarCtx::Builtin);
-        items.insert("bool_literal".into(), GrammarCtx::Builtin);
-        items.insert("num_literal".into(), GrammarCtx::Builtin);
-        items.insert("float_literal".into(), GrammarCtx::Builtin);
-        items.insert("string_literal".into(), GrammarCtx::Builtin);
-        //
-        let input2 = input.clone();
-        let root_mod = syn::parse_macro_input!(input2 as syn::ItemMod);
-        let mod_name = root_mod.ident.to_string();
-        for (_, root_items) in root_mod.content.iter() {
-            for root_item in root_items {
-                if let syn::Item::Struct(root_struct) = root_item {
-                    let struct_name = root_struct.ident.to_string();
-                    let item_name = format!("{mod_name}_{struct_name}");
-                    let mut sub_items = vec![];
-                    for root_field in root_struct.fields.iter() {
-                        let field_name = root_field.ident.as_ref().unwrap().to_string();
-                        let item_sub_name = format!("{item_name}_{field_name}");
-                        let native_type =
-                            root_field.ty.to_token_stream().to_string().replace(" ", "");
-                        if root_field.attrs.len() > 1 {
-                            panic!("current not support multiple attr");
+
+    let enable_builtin_ws = true;
+    let root_mod = parse_macro_input!(input as ItemMod);
+    // let mod_vis = root_mod.vis.to_token_stream().to_string();
+    let mod_name = root_mod.ident.to_string();
+
+    let mut structs = HashMap::new();
+    let mut enums = HashMap::new();
+
+    for (_, root_items) in root_mod.content.iter() {
+        for root_item in root_items {
+            if let syn::Item::Struct(root_struct) = root_item {
+                let struct_name = root_struct.ident.to_string();
+                let mut struct_fields = vec![];
+                for root_field in root_struct.fields.iter() {
+                    let name = root_field.ident.as_ref().unwrap().to_string();
+                    let native_type = root_field.ty.to_token_stream().to_string().replace(" ", "");
+                    struct_fields.push(root_field.attrs.get_grammar_type(name, native_type));
+                }
+                structs.insert(struct_name, (struct_fields, root_struct.attrs.clone()));
+            } else if let syn::Item::Enum(root_enum) = root_item {
+                let enum_name = root_enum.ident.to_string();
+                let mut enum_fields = vec![];
+                for root_field in root_enum.variants.iter() {
+                    let name = root_field.ident.to_string();
+                    let native_type = root_field
+                        .fields
+                        .iter()
+                        .next()
+                        .map(|p| p.to_token_stream().to_string().replace(" ", ""))
+                        .unwrap_or("()".to_string());
+                    enum_fields.push(root_field.attrs.get_grammar_type(name, native_type));
+                }
+                enums.insert(enum_name, (enum_fields, root_enum.attrs.clone()));
+            }
+        }
+    }
+
+    // process field item grammars
+    let structs_bak = structs.clone();
+    let enums_bak = enums.clone();
+    let mut def_types: HashSet<_> = structs.keys().map(|s| s.to_string()).collect();
+    def_types.extend(enums.keys().map(|e| e.to_string()));
+    let structs: HashMap<_, _> = structs
+        .into_iter()
+        .map(|(struct_name, (fields, attrs))| {
+            let fields: Vec<_> = fields
+                .into_iter()
+                .map(|field| field.to_field_item(&structs_bak, &enums_bak, &mod_name, &struct_name))
+                .collect();
+            (struct_name, (fields, attrs))
+        })
+        .collect();
+    let enums: HashMap<_, _> = enums
+        .into_iter()
+        .map(|(enum_name, (fields, attrs))| {
+            let fields: Vec<_> = fields
+                .into_iter()
+                .map(|field| field.to_field_item(&structs_bak, &enums_bak, &mod_name, &enum_name))
+                .collect();
+            (enum_name, (fields, attrs))
+        })
+        .collect();
+
+    let mut pest_cnt = "".to_string();
+    pest_cnt.push_str(
+        r#"// This file is generated by crate: pesticide
+// Please do not modify this file
+
+WS      = _{ " " | "\t" | NEWLINE }
+COMMENT = _{ ("//" ~ (!NEWLINE ~ ANY)*) | ("/*" ~ (!"*/" ~ ANY)* ~ "*/") }
+
+ID           = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+bool_literal = @{ "true" | "false" }
+num_literal  = @{ (("+"|"-")?~ASCII_DIGIT+) | (("0x"|"0X")~HEX_DIGIT+ ) | (("0b"|"0B")~("0"|"1")+) }
+float_literal = @{ num_literal | "nan" | ("+"|"-")?~("inf" | (ASCII_DIGIT+~"."~ASCII_DIGIT*) | (ASCII_DIGIT*~"."~ASCII_DIGIT+)) }
+string_literal = @{ "\"" ~ ("\\\"" | (!"\"" ~ ANY))* ~ "\"" }
+
+
+
+"#,
+    );
+    for (struct_name, (fields, _)) in structs.iter() {
+        pest_cnt.push_str(&format!("// struct - {}::{}\n", mod_name, struct_name));
+        for field in fields.iter() {
+            if field.ignore {
+                continue;
+            }
+            pest_cnt.push_str(&format!(
+                "{}_{}_{} = {}\n",
+                mod_name,
+                struct_name,
+                field.name,
+                field.ctx_grammar.serilize()
+            ));
+        }
+        let fields = {
+            let mut fields1 = vec![];
+            for field in fields.iter() {
+                if field.ignore {
+                    continue;
+                }
+                fields1.push(field.get_grammar_item(&mod_name, struct_name, enable_builtin_ws));
+            }
+            fields1
+        };
+        pest_cnt.push_str(&match enable_builtin_ws {
+            true => format!(
+                "{}_{} = {{ WS* ~ {} ~ WS* }}\n",
+                mod_name,
+                struct_name,
+                fields.join(" ~ WS* ~ ")
+            ),
+            false => format!(
+                "{}_{} = {{ {} }}\n",
+                mod_name,
+                struct_name,
+                fields.join(" ~ ")
+            ),
+        });
+        pest_cnt.push_str(&format!(
+            "entry_{0}_{1} = {{ SOI ~ {0}_{1} ~ EOI }}\n\n",
+            mod_name, struct_name
+        ));
+    }
+    for (enum_name, (fields, _)) in enums.iter() {
+        pest_cnt.push_str(&format!("// enum - {}::{}\n", mod_name, enum_name));
+        for field in fields.iter() {
+            pest_cnt.push_str(&format!(
+                "{}_{}_{} = {}\n",
+                mod_name,
+                enum_name,
+                field.name,
+                field.ctx_grammar.serilize()
+            ));
+        }
+        let fields = fields
+            .iter()
+            .map(|field| field.get_grammar_item(&mod_name, enum_name, enable_builtin_ws))
+            .collect::<Vec<_>>();
+        pest_cnt.push_str(&match enable_builtin_ws {
+            true => format!(
+                "{}_{} = {{ WS* ~ ({}) ~ WS* }}\n",
+                mod_name,
+                enum_name,
+                fields.join(" | ")
+            ),
+            false => format!(
+                "{}_{} = {{ {} }}\n",
+                mod_name,
+                enum_name,
+                fields.join(" | ")
+            ),
+        });
+        pest_cnt.push_str(&format!(
+            "entry_{0}_{1} = {{ SOI ~ {0}_{1} ~ EOI }}\n\n",
+            mod_name, enum_name
+        ));
+    }
+    File::create("target/pesticide.pest")
+        .unwrap()
+        .write_all(pest_cnt.as_bytes())
+        .unwrap();
+
+    let structs: Vec<_> = structs
+        .into_iter()
+        .map(|(struct_name, (fields, attrs))| {
+            let root_fields: Vec<_> = fields
+                .iter()
+                .map(|field| {
+                    let name = field.name.to_ident();
+                    let native_type: syn::Type = parse_str(&field.native_type).unwrap();
+                    quote! { pub #name: #native_type, }
+                })
+                .collect();
+            let field_init: Vec<_> = fields
+                .iter()
+                .map(|field| {
+                    let name: syn::Ident = field.name.to_ident();
+                    let init_value = field.init_value.clone();
+                    quote! { #name: #init_value }
+                })
+                .collect();
+            let mut field_parse = vec![];
+            for field in fields.iter() {
+                if field.ignore {
+                    continue;
+                }
+                let name_full = format!("{}_{}_{}", mod_name, struct_name, field.name).to_ident();
+                let parse_expr: syn::Expr = parse_str(&field.get_struct_parse(&def_types)).unwrap();
+                field_parse.push(quote! { Rule::#name_full => #parse_expr, });
+            }
+            let entry_name = format!("{}_{}", mod_name, struct_name).to_ident();
+            let entry_name2 = format!("entry_{}_{}", mod_name, struct_name).to_ident();
+            let struct_name = struct_name.to_ident();
+            quote! {
+                #(#attrs)*
+                pub struct #struct_name {
+                    #(#root_fields)*
+                }
+
+                impl #struct_name {
+                    pub fn parse_impl(root: pest::iterators::Pair<Rule>) -> anyhow::Result<Self> {
+                        let mut ret = Self {
+                            #(#field_init),*
+                        };
+                        for root_item in root.into_inner() {
+                            match root_item.as_rule() {
+                                Rule::#entry_name => return Self::parse_impl(root_item),
+                                Rule::#entry_name2 => return Self::parse_impl(root_item),
+                                #(#field_parse)*
+                                _ => unreachable!(),
+                            }
                         }
-                        let ctx = root_field
-                            .attrs
-                            .get(0)
-                            .get_grammar_type(item_sub_name.clone(), native_type);
-                        sub_items.push(GrammarCtx::Id(item_sub_name.clone()));
-                        items.insert(item_sub_name, ctx);
+                        Ok(ret)
                     }
-                    items.insert(item_name, GrammarCtx::All(sub_items));
-                } else if let syn::Item::Enum(root_enum) = root_item {
-                    let enum_name = root_enum.ident.to_string();
-                    let item_name = format!("{mod_name}_{enum_name}");
-                    let mut sub_items = vec![];
-                    for root_field in root_enum.variants.iter() {
-                        let field_name = root_field.ident.to_string();
-                        let item_sub_name = format!("{item_name}_{field_name}");
-                        let native_type = root_field
-                            .fields
-                            .iter()
+
+                    pub fn try_parse(data: &str) -> anyhow::Result<Self> {
+                        let root = PesticideParser::parse(Rule::#entry_name, data)?
                             .next()
-                            .map(|p| p.to_token_stream().to_string().replace(" ", ""))
-                            .unwrap_or("()".to_string());
-                        if root_field.attrs.len() > 1 {
-                            panic!("current not support multiple attr");
+                            .ok_or(anyhow::Error::msg("no context found"))?;
+                        Self::parse_impl(root)
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let enums: Vec<_> = enums
+        .into_iter()
+        .map(|(enum_name, (fields, attrs))| {
+            let root_fields: Vec<_> = fields
+                .iter()
+                .map(|field| {
+                    let name = field.name.to_ident();
+                    if field.native_type != "()" {
+                        let native_type = field.native_type.to_ident();
+                        quote! { #name(#native_type), }
+                    } else {
+                        quote! { #name, }
+                    }
+                })
+                .collect();
+            let mut field_parse = vec![];
+            for field in fields.iter() {
+                let name_full = format!("{}_{}_{}", mod_name, enum_name, field.name).to_ident();
+                let (parse_expr, parse_expr1) = field.get_enum_parse(&def_types);
+                let parse_expr: syn::Expr = parse_str(&parse_expr).unwrap();
+                field_parse.push(quote! { Rule::#name_full => #parse_expr, });
+                if let Some(parse_expr1) = parse_expr1 {
+                    let parse_expr1: syn::Expr = parse_str(&parse_expr1).unwrap();
+                    let name_full1 =
+                        format!("{}_{}_{}_wrap", mod_name, enum_name, field.name).to_ident();
+                    field_parse.push(quote! { Rule::#name_full1 => #parse_expr1, });
+                }
+            }
+            let entry_name = format!("{}_{}", mod_name, enum_name).to_ident();
+            let entry_name2 = format!("entry_{}_{}", mod_name, enum_name).to_ident();
+            let enum_name = enum_name.to_ident();
+            quote! {
+                #(#attrs)*
+                pub enum #enum_name {
+                    #(#root_fields)*
+                }
+
+                impl #enum_name {
+                    pub fn parse_impl(root: pest::iterators::Pair<Rule>) -> anyhow::Result<Self> {
+                        let root_item = root.into_inner().next().unwrap();
+                        match root_item.as_rule() {
+                            Rule::#entry_name => Self::parse_impl(root_item),
+                            Rule::#entry_name2 => Self::parse_impl(root_item),
+                            #(#field_parse)*
+                            _ => unreachable!(),
                         }
-                        let ctx = root_field
-                            .attrs
-                            .get(0)
-                            .get_grammar_type(item_sub_name.clone(), native_type);
-                        sub_items.push(GrammarCtx::Id(item_sub_name.clone()));
-                        items.insert(item_sub_name, ctx);
                     }
-                    items.insert(item_name, GrammarCtx::All(sub_items));
+
+                    pub fn try_parse(data: &str) -> anyhow::Result<Self> {
+                        let root = PesticideParser::parse(Rule::#entry_name, data)?
+                            .next()
+                            .ok_or(anyhow::Error::msg("no context found"))?;
+                        Self::parse_impl(root)
+                    }
                 }
             }
+        })
+        .collect();
+
+    let mod_name = mod_name.to_ident();
+    let a = quote! {
+        pub mod #mod_name {
+            use pest::Parser;
+            use pest_derive::Parser;
+
+            #[derive(Parser)]
+            #[grammar = #target_path]
+            pub struct PesticideParser;
+
+            #(#structs)*
+            #(#enums)*
         }
-        items
     };
-    //
-    quote::quote! {}.into()
+    //panic!("AAAAAAA\n{}", a.to_token_stream().to_string());
+    a.into()
 }
 
-struct GrammarCtxRepeat {
-    pub field: GrammarCtx,
-    pub split: GrammarCtx,
-    pub allow_empty: bool,
-}
-
-enum GrammarCtx {
-    Builtin,
-    Id(String),
-    Str(String),
-    Option(Box<GrammarCtx>),
-    All(Vec<GrammarCtx>),
-    Any(Vec<GrammarCtx>),
-    Repeat(Box<GrammarCtxRepeat>),
-    Silent(Box<GrammarCtx>),
-    Atomic(Box<GrammarCtx>),
-    Raw(String),
-}
-
-trait AttributeExt {
-    fn get_name(&self) -> Option<String>;
-}
-
-impl AttributeExt for syn::Attribute {
-    fn get_name(&self) -> Option<String> {
-        self.path().get_ident().map(|i| i.to_string())
-    }
-}
-
-impl AttributeExt for syn::meta::ParseNestedMeta<'_> {
-    fn get_name(&self) -> Option<String> {
-        self.path.get_ident().map(|i| i.to_string())
-    }
-}
-
-trait CalcItemExt {
-    fn get_grammar_type(&self, name: String, native_type: String) -> GrammarCtx;
-}
-
-impl CalcItemExt for Option<&syn::Attribute> {
-    fn get_grammar_type(&self, name: String, native_type: String) -> GrammarCtx {
-        panic!("BBBBBBBBBB {:?}", self.to_token_stream());
-        match self {
-            Some(attr) => {
-                if let Some(name) = attr.get_name() {
-                    if name == "any" {
-                        //let mut items = vec![];
-                        panic!("AAAAAAAAAA {:?}", attr.to_token_stream());
-                    }
-                }
-                todo!()
-            }
-            None => todo!(),
-        }
-        GrammarCtx::Builtin
-    }
-}
-
-/*
-// 匹配运算符 -> ast_Oper = "+" | "-" | "*" | "/" | "%" | "**"
-#[any("+", "-", "*", "/", "%", "**")]
-pub enum Oper {}
-*/
+// #[proc_macro_attribute]
+// pub fn my_function(attr: TokenStream, item: TokenStream) -> TokenStream {
+//     let function_name = attr.to_string();
+//     let mut result = item.to_string();
+//     result.push_str(&format!("fn {}() {{", function_name));
+//     result.push_str("println!(\"This is a custom function generated by attribute macro!\"); }");
+//     result.parse().unwrap()
+// }
